@@ -1,0 +1,1208 @@
+<!-- delete not — « Neque porro quisquam est qui dolorem ipsum, quia dolor sit, amet, consectetur, adipisci velit, sed quia nonnumquam eiusmodi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. » , mihi quidem haec est Alma Tellus, me alens :— a me pasta — mihi cara mater; alienis vero gelida humus -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>zₙ₊₁ = zₙ² + c</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#000}
+canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
+#bar{position:fixed;top:12px;right:12px;display:flex;gap:10px;align-items:center}
+#rec{font:600 14px system-ui,sans-serif;padding:8px 14px;border:1px solid #fff6;border-radius:6px;background:#000a;color:#fff;cursor:pointer}
+#rec.on{background:#c00;border-color:#f66}
+#rec:disabled{opacity:.5;cursor:default}
+#speed{width:140px;cursor:pointer}
+.m{font:600 14px system-ui,sans-serif;width:32px;padding:8px 0;border:1px solid #fff6;border-radius:6px;background:#000a;color:#fff;cursor:pointer}
+.m.on{background:#fff;color:#000}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="bar"><button class="m on" data-m="1">1</button><button class="m" data-m="2">2</button><button class="m" data-m="3">3</button><button class="m" data-m="4">4</button><button class="m" data-m="5">5</button><input id="speed" type="range" min="1" max="16" step="0.1" value="2"><button id="rec">rekord</button></div>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.min.js"></script>
+<script id="math">
+let P = 128, Pb = 128n;
+function fx(v) {
+  if (v === 0n) return [0, -1e30];
+  const neg = v < 0n;
+  if (neg) v = -v;
+  let sh = P - 60;
+  let t = Number(v >> BigInt(sh));
+  if (t < 1048576) {
+    sh = Math.max(0, v.toString(16).length * 4 - 60);
+    t = Number(v >> BigInt(sh));
+  }
+  const e0 = Math.floor(Math.log2(t));
+  return [(neg ? -t : t) / 2 ** e0, e0 + sh - P];
+}
+
+function bigOf(v) {
+  return BigInt(Math.round(v * 4503599627370496)) << BigInt(P - 52);
+}
+
+function bigOfScaled(q, lp) {
+  const s = lp + P;
+  const f = Math.floor(s);
+  const mant = BigInt(Math.round(q * 2 ** (s - f) * 4503599627370496));
+  const sh = f - 52;
+  return sh >= 0 ? mant << BigInt(sh) : mant >> BigInt(-sh);
+}
+
+function feN(x, y, e) {
+  const k = Math.max(Math.abs(x), Math.abs(y));
+  if (k === 0) return [0, 0, -1e30];
+  const s = Math.floor(Math.log2(k)), f = 2 ** -s;
+  return [x * f, y * f, e + s];
+}
+function feMul(a, b) {
+  return feN(a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0], a[2] + b[2]);
+}
+function feAdd(a, b) {
+  const d = a[2] - b[2];
+  if (d > 64) return a;
+  if (d < -64) return b;
+  if (d >= 0) { const f = 2 ** -d; return feN(a[0] + b[0] * f, a[1] + b[1] * f, a[2]); }
+  const f = 2 ** d;
+  return feN(a[0] * f + b[0], a[1] * f + b[1], b[2]);
+}
+function feSub(a, b) {
+  return feAdd(a, [-b[0], -b[1], b[2]]);
+}
+function feDiv(a, b) {
+  const den = b[0] * b[0] + b[1] * b[1];
+  return feN((a[0] * b[0] + a[1] * b[1]) / den, (a[1] * b[0] - a[0] * b[1]) / den, a[2] - b[2]);
+}
+function feL2(a) {
+  return a[0] === 0 && a[1] === 0 ? -Infinity : a[2] + 0.5 * Math.log2(a[0] * a[0] + a[1] * a[1]);
+}
+function feBig(x, y) {
+  const [mx, ex] = fx(x), [my, ey] = fx(y);
+  const e = Math.max(ex, ey);
+  return feN(mx * 2 ** (ex - e), my * 2 ** (ey - e), e);
+}
+function lsub(a, b) {
+  return a > b ? a + Math.log2(1 - 2 ** (b - a)) : -Infinity;
+}
+
+function misNewton(cx, cy, k, p, maxSteps) {
+  const n = k + p, pb = Pb, p1 = Pb - 1n, lim = 65536n << Pb;
+  const divs = [];
+  for (let q = 1; q < p; q++) if (p % q === 0) divs.push(q);
+  for (let s = 0; s < maxSteps; s++) {
+    const zx = [0n], zy = [0n], ds = [[0, 0, -1e30]];
+    let x = 0n, y = 0n, d = ds[0];
+    for (let i = 0; i < n; i++) {
+      d = feAdd(feMul(feBig(x, y), [2 * d[0], 2 * d[1], d[2]]), [1, 0, 0]);
+      const x2 = (x * x) >> pb, y2 = (y * y) >> pb;
+      if (x2 + y2 > lim) return null;
+      const ny = ((x * y) >> p1) + cy;
+      x = x2 - y2 + cx;
+      y = ny;
+      zx.push(x);
+      zy.push(y);
+      ds.push(d);
+    }
+    const k1 = k - 1;
+    if (feL2(feBig(zx[k1], zy[k1])) < -P / 2) return null;
+    const term = (a) => {
+      const gx = zx[a] + zx[k1], gy = zy[a] + zy[k1];
+      if (gx === 0n && gy === 0n) return null;
+      return feDiv(feAdd(ds[a], ds[k1]), feBig(gx, gy));
+    };
+    let S = term(n - 1);
+    if (!S) return [cx, cy];
+    const res = feL2(feBig(zx[n - 1] + zx[k1], zy[n - 1] + zy[k1]));
+    for (const q of divs) { const t = term(k1 + q); if (!t) return null; S = feSub(S, t); }
+    if (S[0] === 0 && S[1] === 0) return null;
+    const st = feDiv([1, 0, 0], S);
+    const ls = feL2(st);
+    if (!isFinite(ls)) return null;
+    if (ls < -(P - 12)) return res < -20 ? [cx, cy] : null;
+    if (ls > 3) return null;
+    cx -= bigOfScaled(st[0], st[2]);
+    cy -= bigOfScaled(st[1], st[2]);
+  }
+  return null;
+}
+</script>
+<script type="text/plain" id="ow">
+const TEXW = 4096, BLA_EPS = -24;
+const orbits = new Map();
+let busy = false;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function blaTable(d, L, dcL2) {
+  const n0 = Math.max(0, L - 2);
+  const levels = [];
+  let cur = new Float64Array(n0 * 7), cnt = n0;
+  for (let m = 1; m <= n0; m++) {
+    const x = d[4 * m], y = d[4 * m + 1], e = d[4 * m + 2], o = 7 * (m - 1);
+    const zl = x === 0 && y === 0 ? -Infinity : e + 0.5 * Math.log2(x * x + y * y);
+    const A = feN(2 * x, 2 * y, e);
+    cur[o] = A[0]; cur[o + 1] = A[1]; cur[o + 2] = A[2];
+    cur[o + 3] = 1; cur[o + 4] = 0; cur[o + 5] = 0;
+    cur[o + 6] = lsub(BLA_EPS + zl, dcL2) - Math.log2(2 * 2 ** zl + 1);
+  }
+  levels.push([cur, cnt]);
+  while (cnt >= 2 && levels.length < 24) {
+    const nc = cnt >> 1, nx = new Float64Array(nc * 7);
+    for (let j = 0; j < nc; j++) {
+      const a = 14 * j, b = a + 7, o = 7 * j;
+      const Ax = [cur[a], cur[a + 1], cur[a + 2]], Bx = [cur[a + 3], cur[a + 4], cur[a + 5]], rx = cur[a + 6];
+      const Ay = [cur[b], cur[b + 1], cur[b + 2]], By = [cur[b + 3], cur[b + 4], cur[b + 5]], ry = cur[b + 6];
+      const A = feMul(Ay, Ax), B = feAdd(feMul(Ay, Bx), By);
+      const r = rx === -Infinity ? -Infinity : Math.min(rx, lsub(ry, feL2(Bx) + dcL2) - feL2(Ax));
+      nx[o] = A[0]; nx[o + 1] = A[1]; nx[o + 2] = A[2];
+      nx[o + 3] = B[0]; nx[o + 4] = B[1]; nx[o + 5] = B[2];
+      nx[o + 6] = r;
+    }
+    cur = nx;
+    cnt = nc;
+    levels.push([cur, cnt]);
+  }
+  const off = new Int32Array(24), cnts = new Int32Array(24);
+  let total = 0;
+  levels.forEach(([, c], l) => { off[l] = total; cnts[l] = c; total += c; });
+  const rows = Math.max(1, Math.ceil(2 * total / TEXW));
+  const out = new Float32Array(rows * TEXW * 4);
+  levels.forEach(([arr, c], l) => {
+    for (let j = 0; j < c; j++) {
+      const s = 7 * j, t = 8 * (off[l] + j);
+      out[t] = arr[s]; out[t + 1] = arr[s + 1]; out[t + 2] = arr[s + 2];
+      out[t + 3] = arr[s + 6] === -Infinity ? -3e30 : arr[s + 6];
+      out[t + 4] = arr[s + 3]; out[t + 5] = arr[s + 4]; out[t + 6] = arr[s + 5];
+    }
+  });
+  return {out, off, cnts, levels: levels.length, rows};
+}
+
+function grow(o, n) {
+  if (4 * n <= o.data.length) return;
+  let m = o.data.length;
+  while (m < 4 * n) m *= 2;
+  const d = new Float32Array(m);
+  d.set(o.data.subarray(0, 4 * o.len));
+  o.data = d;
+}
+
+function work(o, ms) {
+  P = o.prec;
+  Pb = BigInt(o.prec);
+  const p = Pb, p1 = Pb - 1n, cx = o.cx, cy = o.cy, t0 = Date.now();
+  let x = o.x, y = o.y;
+  while (!o.esc && o.len < o.target) {
+    const nx = ((x * x) >> p) - ((y * y) >> p) + cx;
+    const ny = ((x * y) >> p1) + cy;
+    const [mx, ex] = fx(nx), [my, ey] = fx(ny);
+    const ax = ex > -1000 ? mx * 2 ** ex : 0, ay = ey > -1000 ? my * 2 ** ey : 0;
+    if (ax * ax + ay * ay > 65536) { o.esc = true; break; }
+    grow(o, o.len + 1);
+    const e = Math.max(ex, ey), k = 4 * o.len;
+    o.data[k] = mx * 2 ** (ex - e);
+    o.data[k + 1] = my * 2 ** (ey - e);
+    o.data[k + 2] = e;
+    x = nx;
+    y = ny;
+    o.len++;
+    if ((o.len & 127) === 0 && Date.now() - t0 > ms) break;
+  }
+  o.x = x;
+  o.y = y;
+}
+
+function flush(o) {
+  const done = o.esc || o.len >= o.target;
+  if (o.sent === o.len && o.sentDone === done) return;
+  const part = o.data.slice(4 * o.sent, 4 * o.len);
+  postMessage({t: 'chunk', id: o.id, start: o.sent, len: o.len, esc: o.esc, done, data: part}, [part.buffer]);
+  o.sent = o.len;
+  o.sentDone = done;
+}
+
+async function pump() {
+  if (busy) return;
+  busy = true;
+  for (;;) {
+    let any = false;
+    for (const o of orbits.values()) {
+      if (!o.esc && o.len < o.target) { work(o, 25); any = true; }
+      flush(o);
+    }
+    if (!any) break;
+    await sleep(0);
+  }
+  busy = false;
+}
+
+onmessage = e => {
+  const m = e.data;
+  if (m.t === 'orbit') {
+    const o = {id: m.id, cx: m.cx, cy: m.cy, prec: m.P, x: 0n, y: 0n, len: 1, esc: false, target: m.n, data: new Float32Array(TEXW * 4), sent: 0, sentDone: false};
+    o.data[2] = -1e30;
+    orbits.set(m.id, o);
+    pump();
+  } else if (m.t === 'extend') {
+    const o = orbits.get(m.id);
+    if (o && m.n > o.target) { o.target = m.n; pump(); }
+  } else if (m.t === 'drop') {
+    orbits.delete(m.id);
+  } else if (m.t === 'bla') {
+    const o = orbits.get(m.id);
+    if (!o) { postMessage({t: 'bla', id: m.id, none: true}); return; }
+    const L = Math.min(m.len, o.len), r = blaTable(o.data, L, m.dc);
+    postMessage({t: 'bla', id: m.id, dc: m.dc, len: L, ...r}, [r.out.buffer]);
+  }
+};
+</script>
+<script>
+const canvas = document.getElementById('c');
+const recBtn = document.getElementById('rec');
+const speedEl = document.getElementById('speed');
+const gl = canvas.getContext('webgl2', {antialias: false, depth: false, stencil: false, alpha: false, preserveDrawingBuffer: true});
+
+const VS = `#version 300 es
+void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.0-1.0,0.0,1.0);}`;
+
+const FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uRef;
+uniform sampler2D uBlaT;
+uniform int uRefLen;
+uniform int uMaxIter;
+uniform vec2 uRes;
+uniform vec2 uOff;
+uniform float uPixM;
+uniform float uPixE;
+uniform bool uDeep;
+uniform bool uProbe;
+uniform bool uRefEsc;
+uniform bool uBla;
+uniform int uLevels;
+uniform int uLvOff[24];
+uniform int uLvCnt[24];
+uniform int uMode;
+uniform vec2 uRange;
+uniform float uFocusIn;
+uniform float uFocusOut;
+out vec4 o;
+struct F{vec2 m;float e;};
+F fn(vec2 m,float e){float k=max(abs(m.x),abs(m.y));if(k==0.0)return F(vec2(0.0),-1e30);float s=floor(log2(k));return F(m*exp2(-s),e+s);}
+F fm(F a,F b){return fn(vec2(a.m.x*b.m.x-a.m.y*b.m.y,a.m.x*b.m.y+a.m.y*b.m.x),a.e+b.e);}
+F fa(F a,F b){float d=a.e-b.e;if(d>40.0)return a;if(d<-40.0)return b;if(d>=0.0)return fn(a.m+b.m*exp2(-d),a.e);return fn(a.m*exp2(d)+b.m,b.e);}
+float fl(F a){return 2.0*a.e+log2(max(dot(a.m,a.m),1e-30));}
+vec4 rf(int m){return texelFetch(uRef,ivec2(m&4095,m>>12),0);}
+vec4 bf(int t){return texelFetch(uBlaT,ivec2(t&4095,t>>12),0);}
+vec3 desert(float t){
+  vec3 c0=vec3(0.16,0.08,0.04),c1=vec3(0.60,0.26,0.11),c2=vec3(0.85,0.55,0.24),c3=vec3(0.95,0.84,0.60),c4=vec3(1.0,0.96,0.87);
+  float x=fract(t)*5.0;
+  if(x<1.0)return mix(c0,c1,smoothstep(0.0,1.0,x));
+  if(x<2.0)return mix(c1,c2,smoothstep(1.0,2.0,x));
+  if(x<3.0)return mix(c2,c3,smoothstep(2.0,3.0,x));
+  if(x<4.0)return mix(c3,c4,smoothstep(3.0,4.0,x));
+  return mix(c4,c0,smoothstep(4.0,5.0,x));
+}
+void main(){
+  float al=1.0;
+  if(uFocusOut>0.0){float fd=length(gl_FragCoord.xy-0.5*uRes);if(fd>uFocusOut)discard;al=1.0-smoothstep(uFocusIn,uFocusOut,fd);}
+  vec2 p=gl_FragCoord.xy-0.5*uRes+uOff;
+  int i=0;int m=0;bool esc=false;bool g=false;float lr=0.0;
+  if(uDeep){
+    F dc=fn(p*uPixM,uPixE);
+    F dz=F(vec2(0.0),-1e30);
+    for(int it=0;it<uMaxIter;it++){
+      if(i>=uMaxIter)break;
+      bool hit=false;
+      if(uBla&&m>0){
+        float ldz=0.5*fl(dz);
+        int mm=m-1;
+        for(int l=23;l>=0;l--){
+          if(l>=uLevels)continue;
+          int s=1<<l;
+          if((mm&(s-1))!=0)continue;
+          int j=mm>>l;
+          if(j>=uLvCnt[l]||i+s>uMaxIter)continue;
+          int t=2*(uLvOff[l]+j);
+          vec4 a=bf(t);
+          if(ldz<a.w){vec4 b=bf(t+1);dz=fa(fm(F(a.xy,a.z),dz),fm(F(b.xy,b.z),dc));m+=s;i+=s;hit=true;break;}
+        }
+      }
+      if(!hit){
+        vec4 rr=rf(m);
+        dz=fa(fm(fa(F(rr.xy*2.0,rr.z),dz),dz),dc);
+        m++;i++;
+      }
+      vec4 r=rf(m);
+      F z=fa(F(r.xy,r.z),dz);
+      lr=fl(z);
+      if(lr>16.0){esc=true;break;}
+      bool end=m>=uRefLen-1;
+      if(end&&uRefEsc)g=true;
+      if(end||lr<fl(dz)){dz=z;m=0;}
+    }
+  }else{
+    vec2 dc=p*(uPixM*exp2(uPixE));
+    vec2 dz=vec2(0.0);
+    for(int it=0;it<uMaxIter;it++){
+      vec4 rr=rf(m);
+      vec2 a=2.0*rr.xy*exp2(rr.z)+dz;
+      dz=vec2(a.x*dz.x-a.y*dz.y,a.x*dz.y+a.y*dz.x)+dc;
+      m++;i++;
+      vec4 r=rf(m);
+      vec2 z=r.xy*exp2(r.z)+dz;
+      float q=dot(z,z);
+      if(q>65536.0){esc=true;lr=log2(q);break;}
+      bool end=m>=uRefLen-1;
+      if(end&&uRefEsc)g=true;
+      if(end||q<dot(dz,dz)){dz=z;m=0;}
+    }
+  }
+  if(uProbe){int c=(g?128:0)+(esc?64:0);o=vec4(float(i&255),float((i>>8)&255),float((i>>16)&255),float(c))/255.0;return;}
+  float nu=esc?max(float(i)-log2(max(0.5*lr*0.6931472,1e-6)),1.0):float(uMaxIter);
+  if(uMode==5){
+    float h=log2(nu);
+    vec3 nrm=normalize(vec3(-dFdx(h),-dFdy(h),0.04));
+    float lam=clamp(dot(nrm,normalize(vec3(-1.0,1.0,1.0))),0.0,1.0);
+    o=vec4(esc?desert(nu*0.03)*(0.35+0.85*lam):vec3(0.0),al);
+    return;
+  }
+  if(!esc){o=vec4(vec3(uMode==4?1.0:0.0),al);return;}
+  float v=1.0;
+  if(uMode==1)v=0.5+0.5*cos(6.2831853*nu*0.03);
+  else if(uMode==3||uMode==4){float t=clamp((log2(nu)-uRange.x)/max(uRange.y-uRange.x,1e-3),0.0,1.0);v=uMode==3?t:1.0-t;}
+  o=vec4(vec3(v),al);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+gl.bindVertexArray(gl.createVertexArray());
+const U = {};
+for (const n of ['uRef', 'uBlaT', 'uRefLen', 'uMaxIter', 'uRes', 'uOff', 'uPixM', 'uPixE', 'uDeep', 'uProbe', 'uRefEsc', 'uBla', 'uLevels', 'uLvOff', 'uLvCnt', 'uMode', 'uRange', 'uFocusIn', 'uFocusOut']) U[n] = gl.getUniformLocation(prog, n);
+gl.uniform1i(U.uRef, 1);
+gl.uniform1i(U.uBlaT, 2);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+const copyProg = gl.createProgram();
+gl.attachShader(copyProg, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(copyProg, compile(gl.FRAGMENT_SHADER, `#version 300 es
+precision highp float;
+uniform sampler2D uImg;
+uniform vec2 uRes;
+out vec4 o;
+void main(){o=texture(uImg,gl_FragCoord.xy/uRes);}`));
+gl.linkProgram(copyProg);
+if (!gl.getProgramParameter(copyProg, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(copyProg));
+const CU = {uImg: gl.getUniformLocation(copyProg, 'uImg'), uRes: gl.getUniformLocation(copyProg, 'uRes')};
+gl.useProgram(copyProg);
+gl.uniform1i(CU.uImg, 3);
+gl.useProgram(prog);
+
+const TEXW = 4096;
+const HOME_X = -0.5, HOME_Y = 0, HOME_LOG2SPAN = Math.log2(1.3);
+const PW = 64, PAN_FRAMES = 30, DEEP = -90, ITER_CAP = 1 << 22, ITER_BUDGET = 4e9;
+let iterLim = 0;
+let W = 2, H = 2;
+let tx = 0n, ty = 0n, dRelX = 0, dRelY = 0, log2Span = HOME_LOG2SPAN, zooming = false, pan = null;
+let ref = null, texRows = 0, uploaded = 0, probeCooldown = 0, dirty = true, bla = null;
+let recording = false, stopping = false, rec = null;
+let mode = 1, range = null;
+let glide = null, pickRef = null, pickSpan = 0, pickTick = 0;
+
+function makeTex(unit) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const refTex = makeTex(1);
+const blaTex = makeTex(2);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+
+const probeT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: PW, h: 2, buf: null};
+const snapT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 384, h: 2, buf: null};
+const periT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 1, h: 1};
+const pickT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 2, h: 2, buf: null};
+const aheadT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 256, h: 2, buf: null};
+
+function sizePeri(lv) {
+  if (periT.w === W / lv && periT.h === H / lv) return;
+  periT.w = W / lv;
+  periT.h = H / lv;
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, periT.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, periT.w, periT.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, periT.fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, periT.tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function sizeTarget(t) {
+  t.h = Math.max(2, Math.round(t.w * H / W));
+  t.buf = new Uint8Array(t.w * t.h * 4);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, t.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, t.w, t.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function readTarget(t, mi) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+  gl.viewport(0, 0, t.w, t.h);
+  const r = setUniforms(t.w, t.h, true, mi);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.readPixels(0, 0, t.w, t.h, gl.RGBA, gl.UNSIGNED_BYTE, t.buf);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return r;
+}
+
+const ow = new Worker(URL.createObjectURL(new Blob([document.getElementById('math').textContent, document.getElementById('ow').textContent], {type: 'text/javascript'})));
+let refSeq = 0, pendingRef = null, cand = null, blaReq = 0, refFar = false;
+
+function newOrbit(cx, cy, n) {
+  const o = {id: ++refSeq, cx, cy, prec: P, len: 1, esc: false, done: false, req: n, data: new Float32Array(TEXW * 4)};
+  o.data[2] = -1e30;
+  ow.postMessage({t: 'orbit', id: o.id, cx, cy, P, n});
+  return o;
+}
+
+function dropOrbit(o) {
+  if (o) ow.postMessage({t: 'drop', id: o.id});
+}
+
+function setRef(cx, cy) {
+  dropOrbit(pendingRef);
+  pendingRef = newOrbit(cx, cy, Math.ceil((maxIter() + 1) * 1.25) + 1000);
+}
+
+function useRef(o) {
+  if (ref && ref !== o) dropOrbit(ref);
+  ref = o;
+  uploaded = 0;
+  bla = null;
+  dirty = true;
+}
+
+ow.onmessage = e => {
+  const m = e.data;
+  if (m.t === 'bla') {
+    if (blaReq === m.id) blaReq = 0;
+    if (m.none || !ref || m.id !== ref.id) return;
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, blaTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TEXW, m.rows, 0, gl.RGBA, gl.FLOAT, m.out);
+    bla = {id: m.id, len: m.len, dc: m.dc, levels: m.levels, off: m.off, cnts: m.cnts};
+    dirty = true;
+    return;
+  }
+  const o = [ref, pendingRef, cand].find(v => v && v.id === m.id);
+  if (!o) return;
+  if (4 * m.len > o.data.length) {
+    let n = o.data.length;
+    while (n < 4 * m.len) n *= 2;
+    const d = new Float32Array(n);
+    d.set(o.data.subarray(0, 4 * o.len));
+    o.data = d;
+  }
+  o.data.set(m.data, 4 * m.start);
+  o.len = m.len;
+  o.esc = m.esc;
+  o.done = m.done;
+  if (o === pendingRef && (!ref || refFar || o.done || o.len >= ref.len)) {
+    pendingRef = null;
+    useRef(o);
+  } else if (o === cand && o.done) {
+    cand = null;
+    if (ref && o.len > ref.len) useRef(o);
+    else dropOrbit(o);
+  } else if (o === ref) {
+    dirty = true;
+  }
+};
+
+function upload() {
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, refTex);
+  const rows = Math.ceil(ref.len / TEXW);
+  if (rows > texRows) {
+    texRows = Math.max(rows, texRows * 2, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TEXW, texRows, 0, gl.RGBA, gl.FLOAT, null);
+    uploaded = 0;
+  }
+  if (uploaded >= ref.len) return;
+  const r0 = Math.floor(uploaded / TEXW);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r0, TEXW, rows - r0, gl.RGBA, gl.FLOAT, ref.data, r0 * TEXW * 4);
+  uploaded = ref.len;
+}
+
+function baseIter() {
+  return Math.round(300 + 200 * Math.max(0, (HOME_LOG2SPAN - log2Span) * Math.LN2 * Math.LOG10E));
+}
+
+function maxIter() {
+  return Math.min(ITER_CAP, Math.max(baseIter(), Math.round(iterLim)));
+}
+
+function lpFor(rh) {
+  return log2Span - Math.log2(rh / 2);
+}
+
+function centerOff(lp, rh) {
+  const a = fx(tx - fromFull(ref.cx, ref.prec)), b = fx(ty - fromFull(ref.cy, ref.prec));
+  return [a[0] * 2 ** (a[1] - lp) + dRelX * rh / 2, b[0] * 2 ** (b[1] - lp) + dRelY * rh / 2];
+}
+
+function ensurePrecision() {
+  const lp = lpFor(H);
+  if (P >= Math.ceil(-lp) + 48) return;
+  const np = Math.ceil(-lp) + 128;
+  const sh = BigInt(np - P);
+  tx <<= sh;
+  ty <<= sh;
+  P = np;
+  Pb = BigInt(np);
+  setRef(tx, ty);
+}
+
+function fromFull(v, prec) {
+  return prec >= P ? v >> BigInt(prec - P) : v << BigInt(P - prec);
+}
+
+function setUniforms(rw, rh, probe, mi) {
+  const lp = lpFor(rh);
+  const e = Math.floor(lp);
+  const [ox, oy] = centerOff(lp, rh);
+  const useBla = lp < DEEP && bla && bla.id === ref.id;
+  gl.uniform2f(U.uRes, rw, rh);
+  gl.uniform2f(U.uOff, ox, oy);
+  gl.uniform1f(U.uPixM, 2 ** (lp - e));
+  gl.uniform1f(U.uPixE, e);
+  gl.uniform1i(U.uDeep, lp < DEEP ? 1 : 0);
+  gl.uniform1i(U.uProbe, probe ? 1 : 0);
+  gl.uniform1i(U.uRefEsc, ref.esc ? 1 : 0);
+  gl.uniform1i(U.uRefLen, ref.len);
+  gl.uniform1i(U.uMaxIter, mi);
+  gl.uniform1i(U.uBla, useBla ? 1 : 0);
+  gl.uniform1i(U.uMode, mode);
+  gl.uniform2f(U.uRange, range ? range[0] : 0, range ? range[1] : 1);
+  gl.uniform1f(U.uFocusIn, 0);
+  gl.uniform1f(U.uFocusOut, 0);
+  if (useBla) {
+    gl.uniform1i(U.uLevels, bla.levels);
+    gl.uniform1iv(U.uLvOff, bla.off);
+    gl.uniform1iv(U.uLvCnt, bla.cnts);
+  }
+  return [lp, ox, oy];
+}
+
+function probe(mi) {
+  const [lp, ox, oy] = readTarget(probeT, mi);
+  const b = probeT.buf, PH = probeT.h;
+  let best = -1, bi = -1;
+  for (let k = 0; k < PW * PH; k++) {
+    if (!(b[4 * k + 3] & 128)) continue;
+    const it = b[4 * k] | (b[4 * k + 1] << 8) | (b[4 * k + 2] << 16);
+    if (it > best) { best = it; bi = k; }
+  }
+  if (bi < 0) return false;
+  const qx = (bi % PW) + 0.5 - PW / 2 + ox;
+  const qy = Math.floor(bi / PW) + 0.5 - PH / 2 + oy;
+  cand = newOrbit(fromFull(ref.cx, ref.prec) + bigOfScaled(qx, lp), fromFull(ref.cy, ref.prec) + bigOfScaled(qy, lp), mi + 1);
+  return true;
+}
+
+function updateBla() {
+  const lp = lpFor(H);
+  if (!(lp < DEEP)) return;
+  const [ox, oy] = centerOff(lp, H);
+  const need = lp + Math.log2(Math.hypot(W / 2, H / 2) + Math.hypot(ox, oy));
+  if (bla && (bla.id !== ref.id || need > bla.dc)) bla = null;
+  if (blaReq) return;
+  if (!bla || ref.len > bla.len * 1.05 + 16 || need < bla.dc - 2) {
+    blaReq = ref.id;
+    ow.postMessage({t: 'bla', id: ref.id, dc: need + 1, len: ref.len});
+  }
+}
+
+function prepare() {
+  ensurePrecision();
+  const mi = maxIter();
+  for (const o of [ref, pendingRef]) {
+    if (o && !o.esc && o.req < mi + 1) {
+      o.req = Math.ceil((mi + 1) * 1.25) + 1000;
+      ow.postMessage({t: 'extend', id: o.id, n: o.req});
+    }
+  }
+  if (!ref) return mi;
+  const [ox, oy] = centerOff(lpFor(H), H);
+  refFar = !(Math.abs(ox) < 2 * W && Math.abs(oy) < 2 * H);
+  if (refFar && !pendingRef) setRef(tx, ty);
+  if (ref.len < 2) return mi;
+  upload();
+  updateBla();
+  if (ref.esc && ref.done && !cand && probeCooldown-- <= 0) {
+    probe(mi);
+    probeCooldown = 30;
+  }
+  return mi;
+}
+
+function ready() {
+  if (!ref || ref.len < 2) return false;
+  const [ox, oy] = centerOff(lpFor(H), H);
+  if (!(Math.abs(ox) < 2 * W && Math.abs(oy) < 2 * H)) return false;
+  return ref.esc || ref.len > maxIter();
+}
+
+function retarget(px, py, newRef = true) {
+  const qx = dRelX * H / 2 + px, qy = dRelY * H / 2 + py, lp = lpFor(H);
+  tx += bigOfScaled(qx, lp);
+  ty += bigOfScaled(qy, lp);
+  dRelX -= qx / (H / 2);
+  dRelY -= qy / (H / 2);
+  if (newRef) {
+    probeCooldown = 0;
+    setRef(tx, ty);
+  }
+}
+
+function grab(t, mi, extra, atTarget) {
+  const sx = dRelX, sy = dRelY, sp = log2Span;
+  if (atTarget) dRelX = dRelY = 0;
+  log2Span -= extra;
+  readTarget(t, mi);
+  dRelX = sx;
+  dRelY = sy;
+  log2Span = sp;
+}
+
+function nearMap(t) {
+  const b = t.buf, w = t.w, h = t.h, n = w * h, v = new Float64Array(n), m = new Uint8Array(n);
+  for (let k = 0; k < n; k++) v[k] = b[4 * k + 3] & 64 ? b[4 * k] | (b[4 * k + 1] << 8) | (b[4 * k + 2] << 16) : Infinity;
+  const pairs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const k = y * w + x, c = v[k];
+    if (c === Infinity) { m[k] = 2; continue; }
+    for (const [dx, dy] of pairs) {
+      const a = v[k + dy * w + dx], d = v[k - dy * w - dx];
+      if ((c > a && c >= d) || (c >= a && c > d)) { m[k] = 1; break; }
+    }
+  }
+  return m;
+}
+
+function armsAt(t, m, x, y, r) {
+  const N = 24;
+  let prev = -1, tr = 0;
+  for (let i = 0; i <= N; i++) {
+    const a = 2 * Math.PI * i / N, px = Math.round(x + r * Math.cos(a)), py = Math.round(y + r * Math.sin(a));
+    if (px < 0 || py < 0 || px >= t.w || py >= t.h) return 0;
+    const v = m[py * t.w + px] === 1 ? 1 : 0;
+    if (prev >= 0 && v !== prev) tr++;
+    prev = v;
+  }
+  return tr / 2;
+}
+
+function isJunction(t, m, x, y) {
+  if (m[y * t.w + x] !== 1) return false;
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    const px = x + dx, py = y + dy;
+    if (px >= 0 && py >= 0 && px < t.w && py < t.h && m[py * t.w + px] === 2) return false;
+  }
+  return armsAt(t, m, x, y, 3) >= 3;
+}
+
+function spotScore(t, m, x, y) {
+  return isJunction(t, m, x, y) ? 1 : 0;
+}
+
+function describe(t, m, x, y) {
+  const d = [], rs = t.h / 108;
+  for (let r = 2; r <= 40; r += 2) {
+    let c = 0, n = 0;
+    for (let i = 0; i < 32; i++) {
+      const a = 2 * Math.PI * i / 32, px = Math.round(x + r * rs * Math.cos(a)), py = Math.round(y + r * rs * Math.sin(a));
+      if (px < 0 || py < 0 || px >= t.w || py >= t.h) continue;
+      n++;
+      if (m[py * t.w + px]) c++;
+    }
+    d.push(n ? c / n : 0);
+  }
+  return d;
+}
+
+function similar(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return 1 - s / a.length;
+}
+
+function pickSpot(t, m, cx, cy, rad, minD = 0) {
+  let best = null, bd = Infinity;
+  for (let y = Math.max(5, Math.floor(cy - rad)); y <= Math.min(t.h - 6, Math.ceil(cy + rad)); y++) {
+    for (let x = Math.max(5, Math.floor(cx - rad)); x <= Math.min(t.w - 6, Math.ceil(cx + rad)); x++) {
+      const d2 = (x - cx) ** 2 + (y - cy) ** 2;
+      if (d2 > rad * rad || d2 < minD * minD || d2 >= bd) continue;
+      if (isJunction(t, m, x, y)) { bd = d2; best = [x, y]; }
+    }
+  }
+  if (!best) return null;
+  return [best[0] + 0.5 - t.w / 2, best[1] + 0.5 - t.h / 2, describe(t, m, best[0], best[1])];
+}
+
+function track() {
+  const mi = maxIter();
+  grab(aheadT, mi, 4, true);
+  let m = nearMap(aheadT);
+  let t = pickSpot(aheadT, m, aheadT.w / 2, aheadT.h / 2, 10);
+  if (t) {
+    const f = H / aheadT.h / 16;
+    retarget(-dRelX * H / 2 + t[0] * f, -dRelY * H / 2 + t[1] * f, false);
+    glide = true;
+    return;
+  }
+  grab(pickT, mi, 0, false);
+  m = nearMap(pickT);
+  const f2 = H / pickT.h;
+  t = pickSpot(pickT, m, pickT.w / 2 - dRelX * H / 2 / f2, pickT.h / 2 - dRelY * H / 2 / f2, 10) || pickSpot(pickT, m, pickT.w / 2, pickT.h / 2, 0.2 * pickT.h);
+  if (!t) return;
+  retarget(t[0] * f2, t[1] * f2, false);
+  glide = true;
+}
+
+function autoPick() {
+  if (log2Span > pickSpan - 2) return;
+  grab(pickT, maxIter(), 0, false);
+  const m = nearMap(pickT), cx = pickT.w / 2, cy = pickT.h / 2, f2 = H / pickT.h;
+  const tsx = cx - dRelX * H / 2 / f2, tsy = cy - dRelY * H / 2 / f2;
+  const dull = !pickSpot(pickT, m, tsx, tsy, 4);
+  if (pickRef && !dull && similar(describe(pickT, m, tsx, tsy), pickRef) < 0.85) return;
+  const t = pickSpot(pickT, m, cx, cy, 0.2 * pickT.h, 8);
+  if (!t) return;
+  retarget(t[0] * f2, t[1] * f2, false);
+  glide = true;
+  pickRef = t[2];
+  pickSpan = log2Span;
+}
+
+function sample(mi) {
+  readTarget(snapT, mi);
+  const b = snapT.buf;
+  let lo = Infinity, hi = 0, u = 0;
+  for (let k = 0; k < b.length; k += 4) {
+    if (!(b[k + 3] & 64)) { u++; continue; }
+    const it = b[k] | (b[k + 1] << 8) | (b[k + 2] << 16);
+    if (it < lo) lo = it;
+    if (it > hi) hi = it;
+  }
+  return {lo, hi, frac: u / (b.length / 4)};
+}
+
+function autoIter(mi) {
+  const s = sample(mi);
+  let need = s.hi * 2;
+  if (s.frac > 0) need = Math.min(need, ITER_BUDGET / (s.frac * W * H));
+  need = Math.min(ITER_CAP, Math.max(need, baseIter()));
+  iterLim = need > mi * 1.01 ? need : Math.max(need, iterLim * 0.99);
+  return s;
+}
+
+function updateRange(s) {
+  if (s.lo === Infinity) return;
+  const t = [Math.log2(Math.max(1, s.lo)), Math.log2(Math.max(2, s.hi))];
+  if (!range) range = t;
+  else range = [range[0] + (t[0] - range[0]) * 0.15, range[1] + (t[1] - range[1]) * 0.15];
+}
+
+let lastKey = '', refine = null, budgetLv = 4, dtEma = 16.7, fastFrames = 0, lastMoveT = 0;
+
+function viewKey() {
+  return log2Span + ':' + dRelX + ':' + dRelY + ':' + mode + ':' + W + 'x' + H;
+}
+
+function chooseLevel() {
+  const now = performance.now(), dt = lastMoveT ? Math.min(now - lastMoveT, 100) : 16.7;
+  lastMoveT = now;
+  dtEma += (dt - dtEma) * 0.2;
+  if (dtEma > 20 && budgetLv < 8) {
+    budgetLv *= 2;
+    dtEma = 16.7;
+    fastFrames = 0;
+  } else if (dtEma < 13 && budgetLv > 1 && ++fastFrames > 30) {
+    budgetLv /= 2;
+    fastFrames = 0;
+  }
+  const z = pan ? 4 : +speedEl.value;
+  return Math.max(budgetLv, z <= 2 ? 1 : z <= 6 ? 2 : 4);
+}
+
+function drawStrips(y0, y1, x0, x1) {
+  gl.enable(gl.SCISSOR_TEST);
+  for (let y = y0; y < y1; y += 64) {
+    gl.scissor(x0, y, x1 - x0, Math.min(64, y1 - y));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.flush();
+  }
+  gl.disable(gl.SCISSOR_TEST);
+}
+
+function drawMoving(mi) {
+  const lv = chooseLevel();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  if (lv === 1) {
+    setUniforms(W, H, false, mi);
+    drawStrips(0, H, 0, W);
+    return;
+  }
+  sizePeri(lv);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, periT.fbo);
+  gl.viewport(0, 0, periT.w, periT.h);
+  setUniforms(periT.w, periT.h, false, mi);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(copyProg);
+  gl.uniform2f(CU.uRes, W, H);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.useProgram(prog);
+  setUniforms(W, H, false, mi);
+  const fi = 0.15 * H, fo = 0.3 * H;
+  gl.uniform1f(U.uFocusIn, fi);
+  gl.uniform1f(U.uFocusOut, fo);
+  gl.enable(gl.BLEND);
+  drawStrips(Math.max(0, Math.floor(H / 2 - fo)), Math.min(H, Math.ceil(H / 2 + fo)), Math.max(0, Math.floor(W / 2 - fo)), Math.min(W, Math.ceil(W / 2 + fo)));
+  gl.disable(gl.BLEND);
+}
+
+function drawRefine() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  setUniforms(W, H, false, refine.mi);
+  gl.enable(gl.SCISSOR_TEST);
+  const t0 = performance.now();
+  while (refine.next < refine.order.length && performance.now() - t0 < 12) {
+    const y = refine.order[refine.next++];
+    gl.scissor(0, y, W, Math.min(64, H - y));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.finish();
+  }
+  gl.disable(gl.SCISSOR_TEST);
+}
+
+function renderFrame() {
+  const mi = prepare();
+  if (!ready()) return false;
+  const key = viewKey();
+  if (key !== lastKey) {
+    lastKey = key;
+    refine = null;
+    const s = autoIter(mi);
+    if (mode === 3 || mode === 4) updateRange(s);
+    if (zooming && !pan) {
+      pickTick++;
+      if (pickTick % 10 === 0) autoPick();
+      else if (pickTick % 4 === 0) track();
+    }
+    drawMoving(mi);
+    return true;
+  }
+  lastMoveT = 0;
+  if (!refine) {
+    const s = autoIter(mi);
+    if (mode === 3 || mode === 4) updateRange(s);
+    const order = [];
+    for (let y = 0; y < H; y += 64) order.push(y);
+    order.sort((a, b) => Math.abs(a + 32 - H / 2) - Math.abs(b + 32 - H / 2));
+    refine = {mi: maxIter(), next: 0, order};
+  }
+  if (refine.next < refine.order.length) drawRefine();
+  return true;
+}
+
+function step() {
+  if (glide) {
+    dRelX *= 0.94;
+    dRelY *= 0.94;
+    if (Math.abs(dRelX) + Math.abs(dRelY) < 1e-4) {
+      glide = null;
+      dRelX = dRelY = 0;
+    }
+  }
+  if (pan) {
+    pan.t++;
+    const u = Math.min(1, pan.t / PAN_FRAMES), s = u * u * (3 - 2 * u);
+    dRelX = pan.x0 * (1 - s);
+    dRelY = pan.y0 * (1 - s);
+    if (u >= 1) {
+      pan = null;
+      dRelX = dRelY = 0;
+      zooming = true;
+    }
+    return true;
+  }
+  if (!zooming) return true;
+  const next = log2Span - Math.log2(+speedEl.value) / 60;
+  log2Span = next;
+  return true;
+}
+
+function home() {
+  P = 128;
+  Pb = 128n;
+  tx = bigOf(HOME_X);
+  ty = bigOf(HOME_Y);
+  dRelX = dRelY = 0;
+  log2Span = HOME_LOG2SPAN;
+  zooming = false;
+  pan = null;
+  glide = null;
+  pickRef = null;
+  dropOrbit(ref);
+  dropOrbit(cand);
+  ref = null;
+  cand = null;
+  bla = null;
+  range = null;
+  iterLim = 0;
+  probeCooldown = 0;
+  setRef(tx, ty);
+  dirty = true;
+}
+
+for (const b of document.querySelectorAll('.m')) {
+  b.addEventListener('click', () => {
+    mode = +b.dataset.m;
+    for (const o of document.querySelectorAll('.m')) o.classList.toggle('on', o === b);
+    range = null;
+    dirty = true;
+  });
+}
+
+function resize() {
+  if (recording) return;
+  const dpr = window.devicePixelRatio || 1;
+  W = Math.max(8, Math.floor(innerWidth * dpr / 8) * 8);
+  H = Math.max(8, Math.floor(innerHeight * dpr / 8) * 8);
+  canvas.width = W;
+  canvas.height = H;
+  sizeTarget(probeT);
+  sizeTarget(snapT);
+  pickT.w = W / 2;
+  sizeTarget(pickT);
+  sizeTarget(aheadT);
+  periT.w = 0;
+  sizePeri(4);
+  lastKey = '';
+  bla = null;
+  dirty = true;
+}
+
+canvas.addEventListener('click', e => {
+  if (stopping || !ready()) return;
+  const r = canvas.getBoundingClientRect();
+  const px = (e.clientX - r.left) / r.width * W - W / 2;
+  const py = H / 2 - (e.clientY - r.top) / r.height * H;
+  grab(pickT, maxIter(), 0, false);
+  const m = nearMap(pickT), sc = H / pickT.h;
+  const t = pickSpot(pickT, m, px / sc + pickT.w / 2, py / sc + pickT.h / 2, 60 / sc);
+  if (!t) return;
+  retarget(t[0] * sc, t[1] * sc);
+  pan = {x0: dRelX, y0: dRelY, t: 0};
+  glide = null;
+  zooming = false;
+  pickRef = t[2];
+  pickSpan = log2Span;
+  dirty = true;
+});
+
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('mandelbrot-rekord', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbGet(k) {
+  try {
+    const db = await idb();
+    return await new Promise(res => {
+      const q = db.transaction('kv').objectStore('kv').get(k);
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => res(null);
+    });
+  } catch { return null; }
+}
+async function idbSet(k, v) {
+  try {
+    const db = await idb();
+    db.transaction('kv', 'readwrite').objectStore('kv').put(v, k);
+  } catch {}
+}
+
+async function getDir() {
+  let h = await idbGet('dir');
+  if (h) {
+    try {
+      if ((await h.queryPermission({mode: 'readwrite'})) === 'granted') return h;
+      if ((await h.requestPermission({mode: 'readwrite'})) === 'granted') return h;
+    } catch {}
+  }
+  h = await showDirectoryPicker({id: 'barabarabere', mode: 'readwrite'});
+  await idbSet('dir', h);
+  return h;
+}
+
+async function pickConfig() {
+  const codecs = ['avc1.640034', 'avc1.640033', 'avc1.640032', 'avc1.64002A', 'avc1.640028'];
+  const hws = ['prefer-software', 'no-preference'];
+  for (const hw of hws) for (const codec of codecs) {
+    const c = {codec, width: W, height: H, framerate: 60, bitrateMode: 'quantizer', hardwareAcceleration: hw, latencyMode: 'quality', avc: {format: 'avc'}};
+    try { if ((await VideoEncoder.isConfigSupported(c)).supported) return {config: c, q: true}; } catch {}
+  }
+  for (const bitrate of [1e9, 8e8, 6e8, 5e8, 4e8, 3e8, 2.5e8, 2e8, 1.5e8, 1.2e8, 1e8, 8e7, 6e7, 5e7, 4e7]) for (const hw of hws) for (const codec of codecs) {
+    const c = {codec, width: W, height: H, framerate: 60, bitrate, bitrateMode: 'variable', hardwareAcceleration: hw, latencyMode: 'quality', avc: {format: 'avc'}};
+    try { if ((await VideoEncoder.isConfigSupported(c)).supported) return {config: c, q: false}; } catch {}
+  }
+  return null;
+}
+
+function stamp() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+}
+
+async function startRec() {
+  recBtn.disabled = true;
+  try {
+    const dir = await getDir();
+    const pc = await pickConfig();
+    if (!pc) throw new Error('VideoEncoder: no supported H.264 config for ' + W + 'x' + H);
+    const fh = await dir.getFileHandle(`mandelbrot_${stamp()}.mp4`, {create: true});
+    const stream = await fh.createWritable();
+    const muxer = new Mp4Muxer.Muxer({
+      target: new Mp4Muxer.FileSystemWritableFileStreamTarget(stream),
+      video: {codec: 'avc', width: W, height: H, frameRate: 60},
+      fastStart: false,
+      firstTimestampBehavior: 'offset'
+    });
+    const r = {stream, muxer, q: pc.q, n: 0, err: null};
+    r.enc = new VideoEncoder({output: (ch, meta) => muxer.addVideoChunk(ch, meta), error: e => { r.err = e; }});
+    r.enc.configure(pc.config);
+    rec = r;
+    recording = true;
+    recBtn.textContent = 'stop rekord';
+    recBtn.classList.add('on');
+  } catch (e) {
+    console.error(e);
+    recBtn.disabled = false;
+    return;
+  }
+  recBtn.disabled = false;
+  recLoop();
+}
+
+async function recLoop() {
+  const r = rec;
+  try {
+    while (recording && !r.err) {
+      if (!ready()) {
+        prepare();
+        await new Promise(res => setTimeout(res, 20));
+        continue;
+      }
+      if (!step()) {
+        await new Promise(res => setTimeout(res, 50));
+        continue;
+      }
+      if (!renderFrame()) continue;
+      const f = new VideoFrame(canvas, {timestamp: Math.round(r.n * 1e6 / 60), duration: Math.round(1e6 / 60)});
+      const key = r.n % 120 === 0;
+      r.enc.encode(f, r.q ? {keyFrame: key, avc: {quantizer: 0}} : {keyFrame: key});
+      f.close();
+      r.n++;
+      while (r.enc.encodeQueueSize > 2) await new Promise(res => r.enc.addEventListener('dequeue', res, {once: true}));
+      await new Promise(requestAnimationFrame);
+    }
+    if (r.err) throw r.err;
+    await r.enc.flush();
+  } catch (e) {
+    console.error(e);
+  }
+  try { r.enc.close(); } catch {}
+  try { r.muxer.finalize(); } catch (e) { console.error(e); }
+  try { await r.stream.close(); } catch (e) { console.error(e); }
+  rec = null;
+  recording = false;
+  stopping = false;
+  recBtn.textContent = 'rekord';
+  recBtn.classList.remove('on');
+  recBtn.disabled = false;
+  home();
+  resize();
+}
+
+recBtn.addEventListener('click', () => {
+  if (!recording) { startRec(); return; }
+  if (stopping) return;
+  stopping = true;
+  recBtn.disabled = true;
+  recording = false;
+});
+
+let last = performance.now(), acc = 0;
+function tick(now) {
+  requestAnimationFrame(tick);
+  if (recording || stopping) { last = now; return; }
+  acc = Math.min(acc + now - last, 100);
+  last = now;
+  if (!ready()) {
+    prepare();
+    acc = 0;
+    return;
+  }
+  while (acc >= 1000 / 60) {
+    const moved = step();
+    acc -= 1000 / 60;
+    if (moved && (zooming || pan)) dirty = true;
+  }
+  if (!refine || refine.next < refine.order.length) dirty = true;
+  if (dirty) {
+    dirty = false;
+    renderFrame();
+  }
+}
+
+addEventListener('resize', resize);
+resize();
+home();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
