@@ -1,4 +1,3 @@
-<!-- delete not — « Neque porro quisquam est qui dolorem ipsum, quia dolor sit, amet, consectetur, adipisci velit, sed quia nonnumquam eiusmodi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. » , mihi quidem haec est Alma Tellus, me alens :— a me pasta — mihi cara mater; alienis vero gelida humus -->
 <!doctype html>
 <html>
 <head>
@@ -19,7 +18,7 @@ canvas{display:block;width:100vw;height:100vh;cursor:crosshair}
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="bar"><button class="m on" data-m="1">1</button><button class="m" data-m="2">2</button><button class="m" data-m="3">3</button><button class="m" data-m="4">4</button><button class="m" data-m="5">5</button><input id="speed" type="range" min="1" max="16" step="0.1" value="2"><button id="rec">rekord</button></div>
+<div id="bar"><button class="m on" data-m="1">1</button><button class="m" data-m="2">2</button><button class="m" data-m="3">3</button><button class="m" data-m="4">4</button><button class="m" data-m="5">5</button><button class="m" data-m="6">L</button><input id="speed" type="range" min="1" max="16" step="0.1" value="2"><button id="rec">rekord</button></div>
 <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.min.js"></script>
 <script id="math">
 let P = 128, Pb = 128n;
@@ -125,6 +124,220 @@ function misNewton(cx, cy, k, p, maxSteps) {
   }
   return null;
 }
+</script>
+<script type="text/plain" id="wk">
+let gen = 0, lpView = 0, needPrec = 0, chain = [];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const ONE = [1, 0, 0];
+
+function setPrec(p) {
+  P = p;
+  Pb = BigInt(p);
+}
+
+function toPrec(v, from, to) {
+  return to >= from ? v << BigInt(to - from) : v >> BigInt(from - to);
+}
+
+function feToBig(f) {
+  return [bigOfScaled(f[0], f[2]), bigOfScaled(f[1], f[2])];
+}
+
+function fe2(z) {
+  return [2 * z[0], 2 * z[1], z[2]];
+}
+
+function nucleus(cx, cy, n) {
+  const p1 = Pb - 1n, lim = 1024n << Pb;
+  for (let s = 0; s < 64; s++) {
+    let x = 0n, y = 0n, d = [0, 0, -1e30], minL = Infinity;
+    for (let i = 1; i <= n; i++) {
+      d = feAdd(feMul(fe2(feBig(x, y)), d), ONE);
+      const x2 = (x * x) >> Pb, y2 = (y * y) >> Pb;
+      if (x2 + y2 > lim) return null;
+      const ny = ((x * y) >> p1) + cy;
+      x = x2 - y2 + cx;
+      y = ny;
+      if (i < n && n % i === 0) { const l = feL2(feBig(x, y)); if (l < minL) minL = l; }
+    }
+    const st = feDiv(feBig(x, y), d);
+    const ls = feL2(st);
+    if (!isFinite(ls) || ls < -(P - 16)) return minL < -P / 2 ? null : [cx, cy];
+    if (ls > 2) return null;
+    const b = feToBig(st);
+    cx -= b[0];
+    cy -= b[1];
+  }
+  return null;
+}
+
+function shapeEst(cx, cy, p) {
+  const p1 = Pb - 1n;
+  let x = cx, y = cy, z = feBig(x, y), dc = ONE, dz = ONE, dcdc = [0, 0, -1e30], dcdz = [0, 0, -1e30];
+  for (let i = 1; i < p; i++) {
+    const z2 = fe2(z);
+    dcdc = fe2(feAdd(feMul(z, dcdc), feMul(dc, dc)));
+    dcdz = fe2(feAdd(feMul(z, dcdz), feMul(dc, dz)));
+    dc = feAdd(feMul(z2, dc), ONE);
+    dz = feMul(z2, dz);
+    const x2 = (x * x) >> Pb, y2 = (y * y) >> Pb, ny = ((x * y) >> p1) + cy;
+    x = x2 - y2 + cx;
+    y = ny;
+    z = feBig(x, y);
+  }
+  const e = feDiv(feAdd(feDiv(dcdc, fe2(dc)), feDiv(dcdz, dz)), feMul(dc, dz));
+  return 2 ** feL2(e);
+}
+
+function sizeEst(cx, cy, p) {
+  const p1 = Pb - 1n;
+  let x = cx, y = cy, z = feBig(x, y), l = ONE, b = ONE;
+  for (let j = 1; j < p; j++) {
+    l = feMul(fe2(z), l);
+    b = feAdd(b, feDiv(ONE, l));
+    const x2 = (x * x) >> Pb, y2 = (y * y) >> Pb, ny = ((x * y) >> p1) + cy;
+    x = x2 - y2 + cx;
+    y = ny;
+    z = feBig(x, y);
+  }
+  return feDiv(ONE, feMul(b, feMul(l, l)));
+}
+
+function findIsland(cx, cy, lR, minP, maxC) {
+  const p1 = Pb - 1n;
+  let x = 0n, y = 0n, d = [0, 0, -1e30], cands = 0;
+  const maxN = 64 * minP + 20000;
+  for (let n = 1; n <= maxN; n++) {
+    d = feAdd(feMul(fe2(feBig(x, y)), d), ONE);
+    const x2 = (x * x) >> Pb, y2 = (y * y) >> Pb;
+    const ny = ((x * y) >> p1) + cy;
+    x = x2 - y2 + cx;
+    y = ny;
+    const ld = feL2(d) + lR, zl = feL2(feBig(x, y));
+    if (ld > 2 || (zl > 2 && zl > ld + 1)) return null;
+    if (n < minP || !(zl < ld)) continue;
+    const r = nucleus(cx, cy, n);
+    if (r && feL2(feBig(r[0] - cx, r[1] - cy)) < lR && shapeEst(r[0], r[1], n) < 0.5) return {x: r[0], y: r[1], p: n};
+    if (++cands >= maxC) return null;
+  }
+  return null;
+}
+
+function refineIsland(isl, pw) {
+  setPrec(pw);
+  const s0 = sizeEst(isl.x, isl.y, isl.p);
+  const pn = Math.max(pw, Math.ceil(-feL2(s0)) + 96);
+  setPrec(pn);
+  const r = nucleus(toPrec(isl.x, pw, pn), toPrec(isl.y, pw, pn), isl.p);
+  if (!r) return null;
+  return {x: r[0], y: r[1], prec: pn, p: isl.p, s: sizeEst(r[0], r[1], isl.p)};
+}
+
+function makeLevel(lvl, parentLogJ) {
+  const logJ = parentLogJ + 0.75 * (feL2(lvl.s) - parentLogJ);
+  return {...lvl, logJ, logSwitch: logJ};
+}
+
+function post(g) {
+  const L = chain[chain.length - 1];
+  postMessage({t: 'target', gen: g, level: chain.length, x: L.x, y: L.y, prec: L.prec, logS: L.logJ});
+}
+
+async function nextLevel(g, last) {
+  const logR = last.logJ + Math.log2(3 / 8), pw = Math.ceil(-(last.logJ - 4)) + 64;
+  postMessage({t: 'plan', gen: g, level: chain.length + 1, logR});
+  for (let t = 0; t < 16; t++) {
+    const a = Math.random() * 2 * Math.PI;
+    setPrec(pw);
+    const qx = toPrec(last.x, last.prec, pw) + bigOfScaled(0.25 * Math.cos(a), last.logJ);
+    const qy = toPrec(last.y, last.prec, pw) + bigOfScaled(0.25 * Math.sin(a), last.logJ);
+    const isl = findIsland(qx, qy, last.logJ - 3, last.p + 1, 16);
+    await sleep(0);
+    if (g !== gen) return null;
+    if (!isl) continue;
+    const lvl = refineIsland(isl, pw);
+    await sleep(0);
+    if (g !== gen) return null;
+    if (!lvl || !(feL2(lvl.s) < last.logJ - 2)) continue;
+    return makeLevel(lvl, last.logJ);
+  }
+  return null;
+}
+
+async function firstIsland(g, cx, cy, P0, lp) {
+  const lR = lp + Math.log2(50), pw = Math.max(P0, Math.ceil(-lR) + 64);
+  setPrec(pw);
+  const x0 = toPrec(cx, P0, pw), y0 = toPrec(cy, P0, pw);
+  let isl = findIsland(x0, y0, lR, 2, 24);
+  if (!isl) {
+    const sub = lp + Math.log2(12);
+    for (let gy = -48; gy <= 48; gy += 18) {
+      for (let gx = -48; gx <= 48; gx += 18) {
+        if (gx * gx + gy * gy > 2500) continue;
+        setPrec(pw);
+        const r = findIsland(x0 + bigOfScaled(gx, lp), y0 + bigOfScaled(gy, lp), sub, 2, 24);
+        if (r && (!isl || r.p < isl.p)) isl = r;
+      }
+      await sleep(0);
+      if (g !== gen) return null;
+    }
+  }
+  return isl ? refineIsland(isl, pw) : null;
+}
+
+async function run(g, cx, cy, P0, lp, h) {
+  const isl = await firstIsland(g, cx, cy, P0, lp);
+  if (g !== gen || !isl) return;
+  chain.push(makeLevel(isl, lp + Math.log2(h / 2)));
+  post(g);
+  while (g === gen) {
+    const last = chain[chain.length - 1];
+    if (needPrec > last.prec) {
+      const pt = needPrec + 64;
+      setPrec(pt);
+      const r = nucleus(toPrec(last.x, last.prec, pt), toPrec(last.y, last.prec, pt), last.p);
+      await sleep(0);
+      if (g !== gen) return;
+      if (r) {
+        Object.assign(last, {x: r[0], y: r[1], prec: pt});
+        postMessage({t: 'refine', gen: g, level: chain.length, x: r[0], y: r[1], prec: pt, logS: last.logJ});
+      }
+      needPrec = Math.min(needPrec, last.prec);
+      continue;
+    }
+    if (chain.filter(c => c.logSwitch < lpView).length >= 3) {
+      await sleep(100);
+      continue;
+    }
+    const nx = await nextLevel(g, last);
+    if (g !== gen) return;
+    if (nx) {
+      chain.push(nx);
+      post(g);
+    }
+    await sleep(0);
+  }
+}
+
+onmessage = e => {
+  const m = e.data;
+  if (m.t === 'start') {
+    gen = m.gen;
+    chain = [];
+    needPrec = 0;
+    lpView = m.lp;
+    run(m.gen, m.cx, m.cy, m.P, m.lp, m.h);
+    return;
+  }
+  if (m.t === 'stop') {
+    if (m.gen >= gen) gen = -1;
+    return;
+  }
+  if (m.gen !== gen) return;
+  if (m.t === 'view') lpView = m.lp;
+  else if (m.t === 'need') needPrec = Math.max(needPrec, m.prec);
+  else if (m.t === 'reject') chain = chain.slice(0, m.level - 1);
+};
 </script>
 <script type="text/plain" id="ow">
 const TEXW = 4096, BLA_EPS = -24;
@@ -295,6 +508,7 @@ F fa(F a,F b){float d=a.e-b.e;if(d>40.0)return a;if(d<-40.0)return b;if(d>=0.0)r
 float fl(F a){return 2.0*a.e+log2(max(dot(a.m,a.m),1e-30));}
 vec4 rf(int m){return texelFetch(uRef,ivec2(m&4095,m>>12),0);}
 vec4 bf(int t){return texelFetch(uBlaT,ivec2(t&4095,t>>12),0);}
+vec3 hsv(float h){return clamp(abs(fract(h+vec3(0.0,2.0/3.0,1.0/3.0))*6.0-3.0)-1.0,0.0,1.0);}
 vec3 desert(float t){
   vec3 c0=vec3(0.16,0.08,0.04),c1=vec3(0.60,0.26,0.11),c2=vec3(0.85,0.55,0.24),c3=vec3(0.95,0.84,0.60),c4=vec3(1.0,0.96,0.87);
   float x=fract(t)*5.0;
@@ -368,6 +582,7 @@ void main(){
     o=vec4(esc?desert(nu*0.03)*(0.35+0.85*lam):vec3(0.0),al);
     return;
   }
+  if(uMode==6){o=vec4(esc?hsv(nu*0.03):vec3(0.0),al);return;}
   if(!esc){o=vec4(vec3(uMode==4?1.0:0.0),al);return;}
   float v=1.0;
   if(uMode==1)v=0.5+0.5*cos(6.2831853*nu*0.03);
@@ -419,7 +634,7 @@ let tx = 0n, ty = 0n, dRelX = 0, dRelY = 0, log2Span = HOME_LOG2SPAN, zooming = 
 let ref = null, texRows = 0, uploaded = 0, probeCooldown = 0, dirty = true, bla = null;
 let recording = false, stopping = false, rec = null;
 let mode = 1, range = null;
-let glide = null, pickRef = null, pickSpan = 0, pickTick = 0;
+let chainGen = 0, tfull = null, plan = null, viewTick = 0, needAsked = 0;
 
 function makeTex(unit) {
   const t = gl.createTexture();
@@ -438,8 +653,6 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
 const probeT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: PW, h: 2, buf: null};
 const snapT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 384, h: 2, buf: null};
 const periT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 1, h: 1};
-const pickT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 2, h: 2, buf: null};
-const aheadT = {tex: gl.createTexture(), fbo: gl.createFramebuffer(), w: 256, h: 2, buf: null};
 
 function sizePeri(lv) {
   if (periT.w === W / lv && periT.h === H / lv) return;
@@ -585,6 +798,10 @@ function ensurePrecision() {
   ty <<= sh;
   P = np;
   Pb = BigInt(np);
+  if (tfull) {
+    tx = fromFull(tfull.x, tfull.prec);
+    ty = fromFull(tfull.y, tfull.prec);
+  }
   setRef(tx, ty);
 }
 
@@ -651,6 +868,13 @@ function updateBla() {
 function prepare() {
   ensurePrecision();
   const mi = maxIter();
+  if (tfull) {
+    const need = Math.ceil(-lpFor(H)) + 64;
+    if (tfull.prec < need && needAsked < need) {
+      needAsked = need + 128;
+      worker.postMessage({t: 'need', gen: chainGen, prec: need + 128});
+    }
+  }
   for (const o of [ref, pendingRef]) {
     if (o && !o.esc && o.req < mi + 1) {
       o.req = Math.ceil((mi + 1) * 1.25) + 1000;
@@ -678,136 +902,49 @@ function ready() {
   return ref.esc || ref.len > maxIter();
 }
 
-function retarget(px, py, newRef = true) {
-  const qx = dRelX * H / 2 + px, qy = dRelY * H / 2 + py, lp = lpFor(H);
-  tx += bigOfScaled(qx, lp);
-  ty += bigOfScaled(qy, lp);
-  dRelX -= qx / (H / 2);
-  dRelY -= qy / (H / 2);
-  if (newRef) {
+const worker = new Worker(URL.createObjectURL(new Blob([document.getElementById('math').textContent, document.getElementById('wk').textContent], {type: 'text/javascript'})));
+worker.onmessage = e => {
+  const m = e.data;
+  if (m.gen !== chainGen) return;
+  if (m.t === 'target') adoptTarget(m);
+  else if (m.t === 'plan') plan = m;
+  else if (m.t === 'refine' && tfull && m.level === tfull.level) {
+    const nx = fromFull(m.x, m.prec), ny = fromFull(m.y, m.prec);
+    if (feL2(feBig(nx - tx, ny - ty)) - lpFor(H) < Math.log2(0.01)) {
+      tx = nx;
+      ty = ny;
+      tfull = m;
+    }
+  }
+};
+
+function adoptTarget(m) {
+  const nx = fromFull(m.x, m.prec), ny = fromFull(m.y, m.prec), lp = lpFor(H);
+  const off = tfull ? feL2(feBig(nx - tx, ny - ty)) - lp : 0;
+  if (!tfull || pan || (off >= Math.log2(0.01) && off < Math.log2(H / 2))) {
+    const a = fx(tx - nx), b = fx(ty - ny);
+    const cx = a[0] * 2 ** (a[1] - lp) + dRelX * H / 2, cy = b[0] * 2 ** (b[1] - lp) + dRelY * H / 2;
+    tx = nx;
+    ty = ny;
+    tfull = m;
+    dRelX = cx / (H / 2);
+    dRelY = cy / (H / 2);
+    pan = {x0: dRelX, y0: dRelY, t: 0};
+    zooming = false;
     probeCooldown = 0;
     setRef(tx, ty);
-  }
-}
-
-function grab(t, mi, extra, atTarget) {
-  const sx = dRelX, sy = dRelY, sp = log2Span;
-  if (atTarget) dRelX = dRelY = 0;
-  log2Span -= extra;
-  readTarget(t, mi);
-  dRelX = sx;
-  dRelY = sy;
-  log2Span = sp;
-}
-
-function nearMap(t) {
-  const b = t.buf, w = t.w, h = t.h, n = w * h, v = new Float64Array(n), m = new Uint8Array(n);
-  for (let k = 0; k < n; k++) v[k] = b[4 * k + 3] & 64 ? b[4 * k] | (b[4 * k + 1] << 8) | (b[4 * k + 2] << 16) : Infinity;
-  const pairs = [[1, 0], [0, 1], [1, 1], [1, -1]];
-  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-    const k = y * w + x, c = v[k];
-    if (c === Infinity) { m[k] = 2; continue; }
-    for (const [dx, dy] of pairs) {
-      const a = v[k + dy * w + dx], d = v[k - dy * w - dx];
-      if ((c > a && c >= d) || (c >= a && c > d)) { m[k] = 1; break; }
-    }
-  }
-  return m;
-}
-
-function armsAt(t, m, x, y, r) {
-  const N = 24;
-  let prev = -1, tr = 0;
-  for (let i = 0; i <= N; i++) {
-    const a = 2 * Math.PI * i / N, px = Math.round(x + r * Math.cos(a)), py = Math.round(y + r * Math.sin(a));
-    if (px < 0 || py < 0 || px >= t.w || py >= t.h) return 0;
-    const v = m[py * t.w + px] === 1 ? 1 : 0;
-    if (prev >= 0 && v !== prev) tr++;
-    prev = v;
-  }
-  return tr / 2;
-}
-
-function isJunction(t, m, x, y) {
-  if (m[y * t.w + x] !== 1) return false;
-  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
-    const px = x + dx, py = y + dy;
-    if (px >= 0 && py >= 0 && px < t.w && py < t.h && m[py * t.w + px] === 2) return false;
-  }
-  return armsAt(t, m, x, y, 3) >= 3;
-}
-
-function spotScore(t, m, x, y) {
-  return isJunction(t, m, x, y) ? 1 : 0;
-}
-
-function describe(t, m, x, y) {
-  const d = [], rs = t.h / 108;
-  for (let r = 2; r <= 40; r += 2) {
-    let c = 0, n = 0;
-    for (let i = 0; i < 32; i++) {
-      const a = 2 * Math.PI * i / 32, px = Math.round(x + r * rs * Math.cos(a)), py = Math.round(y + r * rs * Math.sin(a));
-      if (px < 0 || py < 0 || px >= t.w || py >= t.h) continue;
-      n++;
-      if (m[py * t.w + px]) c++;
-    }
-    d.push(n ? c / n : 0);
-  }
-  return d;
-}
-
-function similar(a, b) {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
-  return 1 - s / a.length;
-}
-
-function pickSpot(t, m, cx, cy, rad, minD = 0) {
-  let best = null, bd = Infinity;
-  for (let y = Math.max(5, Math.floor(cy - rad)); y <= Math.min(t.h - 6, Math.ceil(cy + rad)); y++) {
-    for (let x = Math.max(5, Math.floor(cx - rad)); x <= Math.min(t.w - 6, Math.ceil(cx + rad)); x++) {
-      const d2 = (x - cx) ** 2 + (y - cy) ** 2;
-      if (d2 > rad * rad || d2 < minD * minD || d2 >= bd) continue;
-      if (isJunction(t, m, x, y)) { bd = d2; best = [x, y]; }
-    }
-  }
-  if (!best) return null;
-  return [best[0] + 0.5 - t.w / 2, best[1] + 0.5 - t.h / 2, describe(t, m, best[0], best[1])];
-}
-
-function track() {
-  const mi = maxIter();
-  grab(aheadT, mi, 4, true);
-  let m = nearMap(aheadT);
-  let t = pickSpot(aheadT, m, aheadT.w / 2, aheadT.h / 2, 10);
-  if (t) {
-    const f = H / aheadT.h / 16;
-    retarget(-dRelX * H / 2 + t[0] * f, -dRelY * H / 2 + t[1] * f, false);
-    glide = true;
+    dirty = true;
     return;
   }
-  grab(pickT, mi, 0, false);
-  m = nearMap(pickT);
-  const f2 = H / pickT.h;
-  t = pickSpot(pickT, m, pickT.w / 2 - dRelX * H / 2 / f2, pickT.h / 2 - dRelY * H / 2 / f2, 10) || pickSpot(pickT, m, pickT.w / 2, pickT.h / 2, 0.2 * pickT.h);
-  if (!t) return;
-  retarget(t[0] * f2, t[1] * f2, false);
-  glide = true;
-}
-
-function autoPick() {
-  if (log2Span > pickSpan - 2) return;
-  grab(pickT, maxIter(), 0, false);
-  const m = nearMap(pickT), cx = pickT.w / 2, cy = pickT.h / 2, f2 = H / pickT.h;
-  const tsx = cx - dRelX * H / 2 / f2, tsy = cy - dRelY * H / 2 / f2;
-  const dull = !pickSpot(pickT, m, tsx, tsy, 4);
-  if (pickRef && !dull && similar(describe(pickT, m, tsx, tsy), pickRef) < 0.85) return;
-  const t = pickSpot(pickT, m, cx, cy, 0.2 * pickT.h, 8);
-  if (!t) return;
-  retarget(t[0] * f2, t[1] * f2, false);
-  glide = true;
-  pickRef = t[2];
-  pickSpan = log2Span;
+  if (!(off < Math.log2(0.01))) {
+    worker.postMessage({t: 'reject', gen: chainGen, level: m.level});
+    return;
+  }
+  tx = nx;
+  ty = ny;
+  tfull = m;
+  probeCooldown = 0;
+  setRef(tx, ty);
 }
 
 function sample(mi) {
@@ -924,11 +1061,7 @@ function renderFrame() {
     refine = null;
     const s = autoIter(mi);
     if (mode === 3 || mode === 4) updateRange(s);
-    if (zooming && !pan) {
-      pickTick++;
-      if (pickTick % 10 === 0) autoPick();
-      else if (pickTick % 4 === 0) track();
-    }
+    if (tfull && ++viewTick % 15 === 0) worker.postMessage({t: 'view', gen: chainGen, lp: lpFor(H)});
     drawMoving(mi);
     return true;
   }
@@ -946,14 +1079,6 @@ function renderFrame() {
 }
 
 function step() {
-  if (glide) {
-    dRelX *= 0.94;
-    dRelY *= 0.94;
-    if (Math.abs(dRelX) + Math.abs(dRelY) < 1e-4) {
-      glide = null;
-      dRelX = dRelY = 0;
-    }
-  }
   if (pan) {
     pan.t++;
     const u = Math.min(1, pan.t / PAN_FRAMES), s = u * u * (3 - 2 * u);
@@ -968,6 +1093,7 @@ function step() {
   }
   if (!zooming) return true;
   const next = log2Span - Math.log2(+speedEl.value) / 60;
+  if (tfull && plan && plan.level === tfull.level + 1 && next - Math.log2(H / 2) < plan.logR + 7) return false;
   log2Span = next;
   return true;
 }
@@ -981,8 +1107,11 @@ function home() {
   log2Span = HOME_LOG2SPAN;
   zooming = false;
   pan = null;
-  glide = null;
-  pickRef = null;
+  chainGen++;
+  tfull = null;
+  plan = null;
+  needAsked = 0;
+  worker.postMessage({t: 'stop', gen: chainGen});
   dropOrbit(ref);
   dropOrbit(cand);
   ref = null;
@@ -1013,9 +1142,6 @@ function resize() {
   canvas.height = H;
   sizeTarget(probeT);
   sizeTarget(snapT);
-  pickT.w = W / 2;
-  sizeTarget(pickT);
-  sizeTarget(aheadT);
   periT.w = 0;
   sizePeri(4);
   lastKey = '';
@@ -1028,17 +1154,13 @@ canvas.addEventListener('click', e => {
   const r = canvas.getBoundingClientRect();
   const px = (e.clientX - r.left) / r.width * W - W / 2;
   const py = H / 2 - (e.clientY - r.top) / r.height * H;
-  grab(pickT, maxIter(), 0, false);
-  const m = nearMap(pickT), sc = H / pickT.h;
-  const t = pickSpot(pickT, m, px / sc + pickT.w / 2, py / sc + pickT.h / 2, 60 / sc);
-  if (!t) return;
-  retarget(t[0] * sc, t[1] * sc);
-  pan = {x0: dRelX, y0: dRelY, t: 0};
-  glide = null;
-  zooming = false;
-  pickRef = t[2];
-  pickSpan = log2Span;
-  dirty = true;
+  const lp = lpFor(H);
+  const qx = dRelX * H / 2 + px, qy = dRelY * H / 2 + py;
+  chainGen++;
+  tfull = null;
+  plan = null;
+  needAsked = 0;
+  worker.postMessage({t: 'start', gen: chainGen, cx: tx + bigOfScaled(qx, lp), cy: ty + bigOfScaled(qy, lp), P, lp, h: H});
 });
 
 function idb() {
