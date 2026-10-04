@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>random · benford</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #000; overflow: hidden;
+    font: 13px ui-monospace, Consolas, monospace; color: #888; }
+
+  #grid {
+    height: 100vh; overflow-y: auto; overflow-x: hidden;
+    padding: 24px 22px 60px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .n { display: flex; gap: 12px; align-items: baseline; font-variant-numeric: tabular-nums; }
+  .n i { color: #3a3a3a; font-style: normal; min-width: 26px; text-align: right; font-size: 11px; flex: none; }
+  .n b { font-weight: 400; color: #b8b8b8; word-break: break-all; }
+  .n b u { color: #e8a13a; text-decoration: none; }
+
+  #ui {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; gap: 20px; align-items: center;
+    padding: 9px 16px; background: rgba(0,0,0,.5);
+    opacity: 0; transition: opacity .35s; pointer-events: none;
+    font-size: 11px;
+  }
+  #ui.show { opacity: 1; pointer-events: auto; }
+  #ui label { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  #ui input[type=range] { width: 80px; accent-color: #888; }
+  #ui span { cursor: pointer; }
+  #ui span:hover { color: #ccc; }
+  .num { color: #aaa; min-width: 14px; }
+
+  #bf { display: flex; gap: 3px; align-items: flex-end; height: 26px; margin-left: auto; }
+  #bf .col { width: 7px; position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  #bf .col .exp { position: absolute; left: 0; right: 0; border-top: 1px dashed #555; }
+  #bf .col .act { background: #e8a13a; width: 100%; }
+  #bf .col em { position: absolute; bottom: -12px; left: 0; right: 0; text-align: center; font-style: normal; color: #555; font-size: 9px; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+
+<div id="ui">
+  <span id="regen">↻ regenerate</span>
+  <label>min <input id="lo" type="range" min="1" max="88" value="1"><i class="num" id="lon">1</i>d</label>
+  <label>max <input id="hi" type="range" min="1" max="89" value="6"><i class="num" id="hin">6</i>d</label>
+  <label><input id="sep" type="checkbox" checked> spaces</label>
+  <div id="bf"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const COUNT = 88;
+  let loDigits = 1, hiDigits = 6, commas = true;
+
+  function rand() {
+    const b = new Uint8Array(6);
+    crypto.getRandomValues(b);
+    let x = 0;
+    for (let i = 0; i < 6; i++) x = x * 256 + b[i];
+    return x / 281474976710656;
+  }
+
+  function randomDigits(n) {
+    let s = "";
+    while (s.length < n) {
+      const b = new Uint8Array(n - s.length);
+      crypto.getRandomValues(b);
+      for (let i = 0; i < b.length && s.length < n; i++)
+        if (b[i] < 250) s += (b[i] % 10);
+    }
+    return s;
+  }
+
+  function benford() {
+    const lo = loDigits - 1;
+    const hi = hiDigits;
+    const exp = lo + rand() * (hi - lo);
+    const total = Math.floor(exp) + 1;
+    const frac = exp - Math.floor(exp);
+    let digits = Math.pow(10, frac).toFixed(15).replace(".", "");
+    if (digits.length >= total) digits = digits.slice(0, total);
+    else digits += randomDigits(total - digits.length);
+    return BigInt(digits);
+  }
+
+  const grid = document.getElementById("grid");
+  const counts = new Array(10).fill(0);
+
+  function fmt(digits) {
+    let s = commas ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, " ") : digits;
+    return s.replace(/\d/, (d) => "<u>" + d + "</u>");
+  }
+
+  function generate() {
+    counts.fill(0);
+    let html = "";
+    for (let k = 0; k < COUNT; k++) {
+      const digits = benford().toString();
+      counts[+digits[0]]++;
+      html += '<div class="n"><i>' + (k + 1) + '</i><b>' + fmt(digits) + '</b></div>';
+    }
+    grid.innerHTML = html;
+    drawBenford();
+  }
+
+  const bf = document.getElementById("bf");
+  function drawBenford() {
+    let html = "";
+    for (let d = 1; d <= 9; d++) {
+      const expected = Math.log10(1 + 1 / d);
+      const actual = counts[d] / COUNT;
+      const eh = (expected / 0.301 * 100).toFixed(0);
+      const ah = (actual / 0.301 * 100).toFixed(0);
+      html += '<div class="col" title="' + d + ': ' + (actual*100).toFixed(0) + '% vs ' +
+              (expected*100).toFixed(0) + '%">' +
+              '<div class="exp" style="bottom:' + eh + '%"></div>' +
+              '<div class="act" style="height:' + Math.min(ah, 100) + '%"></div>' +
+              '<em>' + d + '</em></div>';
+    }
+    bf.innerHTML = html;
+  }
+
+  const $ = (id) => document.getElementById(id);
+  function sync() {
+    if (hiDigits < loDigits) { hiDigits = loDigits; $("hi").value = hiDigits; $("hin").textContent = hiDigits; }
+  }
+  $("regen").onclick = generate;
+  $("lo").oninput = (e) => { loDigits = +e.target.value; $("lon").textContent = loDigits; sync(); generate(); };
+  $("hi").oninput = (e) => { hiDigits = +e.target.value; $("hin").textContent = hiDigits; sync(); generate(); };
+  $("sep").onchange = (e) => { commas = e.target.checked; generate(); };
+
+  const ui = $("ui");
+  addEventListener("pointermove", (e) => ui.classList.toggle("show", e.clientY > innerHeight - 60));
+
+  generate();
+})();
+</script>
+</body>
+</html>
